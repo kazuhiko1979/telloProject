@@ -1,10 +1,13 @@
 package models
 
 import (
+	"context"
 	"image"
 	"image/color"
 	"io"
 	"log"
+	"math"
+	"os"
 	"os/exec"
 	"strconv"
 	"time"
@@ -26,6 +29,7 @@ const (
 	frameArea         = frameX * frameY
 	frameSize         = frameArea * 3
 	faceDetectXMLFile = "./app/models/haarcascade_frontalface_default.xml"
+	snapshotsFolder   = "./static/img/snapshots/"
 )
 
 type DroneManager struct {
@@ -38,6 +42,7 @@ type DroneManager struct {
 	ffmpegOut            io.ReadCloser
 	Stream               *mjpeg.Stream
 	faceDetectTrackingOn bool
+	isSnapShot           bool
 }
 
 func NewDroneManager() *DroneManager {
@@ -59,6 +64,7 @@ func NewDroneManager() *DroneManager {
 		ffmpegOut:            ffmpegOut,
 		Stream:               mjpeg.NewStream(),
 		faceDetectTrackingOn: false,
+		isSnapShot:           false,
 	}
 
 	work := func() {
@@ -170,6 +176,11 @@ func (d *DroneManager) StreamVideo() {
 				d.StopPatrol()
 				rects := classifier.DetectMultiScale(img)
 				log.Printf("found %d faces\n", len(rects))
+
+				if len(rects) == 0 {
+					d.Hover()
+				}
+
 				for _, r := range rects {
 					gocv.Rectangle(&img, r, blue, 3)
 					pt := image.Pt(r.Max.X, r.Min.Y-5)
@@ -177,13 +188,70 @@ func (d *DroneManager) StreamVideo() {
 
 					faceWidth := r.Max.X - r.Min.X
 					faceHeight := r.Max.Y - r.Min.Y
+					faceCenterX := r.Min.X + (faceWidth / 2)
+					faceCenterY := r.Min.Y + (faceWidth / 2)
+					faceArea := faceWidth * faceHeight
+					diffX := frameCenterX - faceCenterX
+					diffY := frameCenterY - faceCenterY
+					percentF := math.Round(float64(faceArea) / float64(frameArea) * 100)
+
+					move := false
+					if diffX < -20 {
+						d.Right(15)
+						move = true
+					}
+					if diffX > 20 {
+						d.Left(15)
+						move = true
+					}
+					if diffY < -30 {
+						d.Down(25)
+						move = true
+					}
+					if diffY > 30 {
+						d.Up(25)
+						move = true
+					}
+					if percentF > 7.0 {
+						d.Backward(10)
+						move = true
+					}
+					if percentF < 0.9 {
+						d.Forward(10)
+						move = true
+					}
+					if !move {
+						d.Hover()
+					}
+
 					break
 				}
 			}
 			jpegBuf, _ := gocv.IMEncode(".jpg", img)
+
+			if d.isSnapShot {
+				backupFileName := snapshotsFolder + time.Now().Format(time.RFC3339) + ".jpg"
+				os.WriteFile(backupFileName, jpegBuf.GetBytes(), 0644)
+				snapshotFileName := snapshotsFolder + "snapshot.jpg"
+				os.WriteFile(snapshotFileName, jpegBuf.GetBytes(), 0644)
+				d.isSnapShot = false
+			}
+
 			d.Stream.UpdateJPEG(jpegBuf.GetBytes())
 		}
 	}(d)
+}
+
+func (d *DroneManager) TakeSnapShot() {
+	d.isSnapShot = true
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	for {
+		if !d.isSnapShot || ctx.Err() != nil {
+			break
+		}
+	}
+	d.isSnapShot = false
 }
 
 func (d *DroneManager) EnableFaceDetectTracking() {
