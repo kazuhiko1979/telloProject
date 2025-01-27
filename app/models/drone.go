@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"io"
 	"log"
+	"math"
 	"os/exec"
 	"strconv"
 	"time"
@@ -170,6 +171,11 @@ func (d *DroneManager) StreamVideo() {
 				d.StopPatrol()
 				rects := classifier.DetectMultiScale(img)
 				log.Printf("found %d faces\n", len(rects))
+
+				if len(rects) == 0 {
+					d.Hover()
+				}
+
 				for _, r := range rects {
 					gocv.Rectangle(&img, r, blue, 3)
 					pt := image.Pt(r.Max.X, r.Min.Y-5)
@@ -177,6 +183,42 @@ func (d *DroneManager) StreamVideo() {
 
 					faceWidth := r.Max.X - r.Min.X
 					faceHeight := r.Max.Y - r.Min.Y
+					faceCenterX := r.Min.X + (faceWidth / 2)
+					faceCenterY := r.Min.Y + (faceWidth / 2)
+					faceArea := faceWidth * faceHeight
+					diffX := frameCenterX - faceCenterX
+					diffY := frameCenterY - faceCenterY
+					percentF := math.Round(float64(faceArea) / float64(frameArea) * 100)
+
+					move := false
+					if diffX < -20 {
+						d.Right(15)
+						move = true
+					}
+					if diffX > 20 {
+						d.Left(15)
+						move = true
+					}
+					if diffY < -30 {
+						d.Down(25)
+						move = true
+					}
+					if diffY > 30 {
+						d.Up(25)
+						move = true
+					}
+					if percentF > 7.0 {
+						d.Backward(10)
+						move = true
+					}
+					if percentF < 0.9 {
+						d.Forward(10)
+						move = true
+					}
+					if !move {
+						d.Hover()
+					}
+
 					break
 				}
 			}
